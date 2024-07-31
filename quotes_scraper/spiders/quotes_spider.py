@@ -1,41 +1,69 @@
 import scrapy
-from ..items import QuotesScraperItem, AuthorScraperItem
+from scrapy.crawler import CrawlerProcess
+import json
+
 
 class QuotesSpider(scrapy.Spider):
-    name = 'quotes'
-    start_urls = ['http://quotes.toscrape.com']
+    name = "quotes"
+    start_urls = [
+        'http://quotes.toscrape.com/',
+    ]
+
+    quotes_data = []
 
     def parse(self, response):
-        # Парсинг цитат
         for quote in response.css('div.quote'):
-            # Створення і заповнення елемента цитати
-            quote_item = QuotesScraperItem()
-            quote_item['text'] = quote.css('span.text::text').get()
-            quote_item['author'] = quote.css('span small::text').get()
-            quote_item['tags'] = quote.css('div.tags a.tag::text').getall()
-            if all([quote_item['text'], quote_item['author'], quote_item['tags']]):
-                yield quote_item
-            else:
-                self.log(f"Skipping incomplete quote data: {quote_item}")
+            quote_item = {
+                'tags': quote.css('div.tags a.tag::text').getall(),
+                'author': quote.css('small.author::text').get(),
+                'quote': quote.css('span.text::text').get(),
+            }
+            self.quotes_data.append(quote_item)
 
-            # Отримання URL автора і передача його на обробку
-            author_url = quote.css('span a::attr(href)').get()
-            if author_url:
-                yield response.follow(author_url, self.parse_author)
-
-        # Перехід до наступної сторінки
         next_page = response.css('li.next a::attr(href)').get()
-        if next_page:
+        if next_page is not None:
+            yield response.follow(next_page, self.parse)
+        else:
+            with open('quotes.json', 'w', encoding='utf-8') as f:
+                json.dump(self.quotes_data, f, ensure_ascii=False, indent=2)
+
+
+class AuthorsSpider(scrapy.Spider):
+    name = "authors"
+    start_urls = [
+        'http://quotes.toscrape.com/',
+    ]
+
+    authors_data = []
+
+    def parse(self, response):
+        author_links = response.css('small.author ~ a::attr(href)').getall()
+        for link in author_links:
+            yield response.follow(link, self.parse_author)
+
+        next_page = response.css('li.next a::attr(href)').get()
+        if next_page is not None:
             yield response.follow(next_page, self.parse)
 
     def parse_author(self, response):
-        # Створення і заповнення елемента автора
-        author_item = AuthorScraperItem()
-        author_item['fullname'] = response.css('h3.author-title::text').get()
-        author_item['born_date'] = response.css('span.author-born-date::text').get()
-        author_item['born_location'] = response.css('span.author-born-location::text').get()
-        author_item['description'] = response.css('div.author-description::text').get()
-        if all([author_item['fullname'], author_item['born_date'], author_item['born_location'], author_item['description']]):
-            yield author_item
-        else:
-            self.log(f"Skipping incomplete author data: {author_item}")
+        author_item = {
+            'fullname': response.css('h3.author-title::text').get().strip(),
+            'born_date': response.css('span.author-born-date::text').get(),
+            'born_location': response.css('span.author-born-location::text').get().strip(),
+            'description': ' '.join(response.css('div.author-description::text').get().strip().split()),
+        }
+        self.authors_data.append(author_item)
+
+        with open('authors.json', 'w', encoding='utf-8') as f:
+            json.dump(self.authors_data, f, ensure_ascii=False, indent=2)
+
+
+def run_spiders():
+    process = CrawlerProcess()
+    process.crawl(QuotesSpider)
+    process.crawl(AuthorsSpider)
+    process.start()
+
+
+if __name__ == "__main__":
+    run_spiders()
